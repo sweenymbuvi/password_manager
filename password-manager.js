@@ -251,3 +251,88 @@ class Keychain {
 };
 
 module.exports = { Keychain };
+
+
+//Encryption-Decryption with Subtle Crypto 
+
+// Encrypts a password using AES-GCM encryption
+async function encryptPassword(key, plaintextPassword) {
+  const iv = crypto.getRandomValues(new Uint8Array(12)); // Generate a 12-byte IV for AES-GCM
+
+  const encrypted = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv: iv,
+    },
+    key,
+    stringToBuffer(plaintextPassword)
+  );
+
+  // Return the IV and ciphertext as Base64 for easy storage
+  return {
+    iv: encodeBuffer(iv),
+    ciphertext: encodeBuffer(new Uint8Array(encrypted))
+  };
+}
+
+// Decrypts a password using AES-GCM decryption
+async function decryptPassword(key, encryptedData) {
+  const iv = decodeBuffer(encryptedData.iv); // Decode the IV from Base64
+  const ciphertext = decodeBuffer(encryptedData.ciphertext); // Decode ciphertext from Base64
+
+  const decrypted = await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: iv,
+    },
+    key,
+    ciphertext
+  );
+
+  return bufferToString(new Uint8Array(decrypted)); // Convert decrypted buffer to string
+}
+
+// Export the functions using CommonJS
+module.exports = {
+  encryptPassword,
+  decryptPassword,
+  computeIntegrityHash,
+  verifyIntegrityHash
+};
+
+
+// Adding Integrity functions for Data Verification
+// Computes a hash for integrity verification
+async function computeIntegrityHash(key, data) {
+  const encoder = new TextEncoder();
+  const dataBuffer = encoder.encode(JSON.stringify(data));
+
+  const hash = await crypto.subtle.sign(
+    {
+      name: 'HMAC',
+      hash: 'SHA-256',
+    },
+    key,
+    dataBuffer
+  );
+
+  return encodeBuffer(new Uint8Array(hash));
+}
+
+// Verifies the data integrity
+async function verifyIntegrityHash(key, data, providedHash) {
+  const computedHash = await computeIntegrityHash(key, data);
+
+  if (computedHash !== providedHash) {
+    throw new Error('Data integrity check failed. Possible tampering detected.');
+  }
+}
+
+// Export everything using CommonJS
+module.exports = {
+  Keychain,
+  encryptPassword,
+  decryptPassword,
+  computeIntegrityHash,
+  verifyIntegrityHash
+};

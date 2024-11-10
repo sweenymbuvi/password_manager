@@ -2,6 +2,7 @@
 
 let expect = require('expect.js');
 const { Keychain } = require('../password-manager');
+const crypto = require('crypto');
 
 function expectReject(promise) {
     return promise.then(
@@ -142,5 +143,32 @@ describe('Password manager', async function() {
             expect(Object.getOwnPropertyNames(contentsObj.kvs)).to.have.length(10);
         });
 
+        //Encryption-Decryption with SUbtle Crypto Test
+        it('should encrypt and decrypt a password correctly with integrity check', async function() {
+            // Password to test
+            const originalPassword = 'MySecretPassword';
+    
+            // Generate an AES-GCM key
+            const key = await crypto.subtle.generateKey(
+                { name: 'AES-GCM', length: 256 },
+                true, // Whether the key can be used for encryption and decryption
+                ['encrypt', 'decrypt']
+            );
+    
+            // Encrypt the password
+            const encryptedPassword = await encryptPassword(key, originalPassword);
+    
+            // Compute the integrity hash for the encrypted password
+            const integrityHash = await computeIntegrityHash(key, encryptedPassword);
+    
+            // Verify the integrity hash before decrypting
+            await verifyIntegrityHash(key, encryptedPassword, integrityHash);
+    
+            // Decrypt the password
+            const decryptedPassword = await decryptPassword(key, encryptedPassword);
+    
+            // Assert that the decrypted password matches the original
+            expect(decryptedPassword).to.equal(originalPassword);
+        });
     });
 });
