@@ -1,7 +1,13 @@
 "use strict";
 
 let expect = require('expect.js');
-const { Keychain } = require('../password-manager');
+const { 
+    Keychain,
+    encryptPassword,
+    decryptPassword,
+    computeIntegrityHash,
+    verifyIntegrityHash 
+} = require('../password-manager');
 const crypto = require('crypto');
 
 function expectReject(promise) {
