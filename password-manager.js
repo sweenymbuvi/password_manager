@@ -6,40 +6,76 @@ const { subtle } = require('crypto').webcrypto;
 const crypto = require('crypto');
 
 /********* Constants ********/
-const PBKDF2_ITERATIONS = 100000; // number of iterations for PBKDF2 algorithm
-const MAX_PASSWORD_LENGTH = 64;   // we can assume no password is longer than this many characters
+const PBKDF2_ITERATIONS = 100000;
+const MAX_PASSWORD_LENGTH = 64;
+const VERSION = "1.0";
 
-/********* Implementation ********/
-class Keychain {
+/********* Storage Class Implementation ********/
+class Storage {
   constructor() {
-    this.data = {}; // Public data that won't compromise security
-    this.secrets = {}; // Sensitive data that needs encryption
+    this.kvs = new Map();
   }
 
-  /**
-   * Initializes the Keychain with a derived encryption key from the master password.
-   *
-   * @param {string} password - The master password.
-   * @returns {Keychain} - The initialized Keychain instance.
-   */
+  async store(domainHash, encryptedData) {
+    this.kvs.set(domainHash, {
+      iv: encodeBuffer(encryptedData.iv),
+      ciphertext: encodeBuffer(encryptedData.ciphertext)
+    });
+  }
+
+  async retrieve(domainHash) {
+    const data = this.kvs.get(domainHash);
+    if (!data) return null;
+    
+    return {
+      iv: decodeBuffer(data.iv),
+      ciphertext: decodeBuffer(data.ciphertext)
+    };
+  }
+
+  async remove(domainHash) {
+    return this.kvs.delete(domainHash);
+  }
+
+  async serialize() {
+    const storageObj = {
+      kvs: Object.fromEntries(this.kvs),
+      version: VERSION
+    };
+    return JSON.stringify(storageObj);
+  }
+
+  static async deserialize(jsonStr) {
+    const storage = new Storage();
+    const parsed = JSON.parse(jsonStr);
+    
+    if (!parsed.kvs) {
+      throw new Error("Invalid storage format");
+    }
+
+    storage.kvs = new Map(Object.entries(parsed.kvs));
+    return storage;
+  }
+}
+
+/********* Keychain Class Implementation ********/
+class Keychain {
+  constructor() {
+    this.storage = new Storage();
+    this.secrets = {};
+  }
+
   static async init(password) {
     if (password.length > MAX_PASSWORD_LENGTH) {
       throw new Error("Password exceeds maximum length");
     }
     const keychain = new Keychain();
-    const salt = getRandomBytes(16); // Generate a random salt for PBKDF2
+    const salt = getRandomBytes(16);
     keychain.secrets.salt = salt;
     keychain.secrets.key = await keychain.deriveKey(password, salt);
     return keychain;
   }
 
-  /**
-   * Derives an encryption key from the master password using PBKDF2.
-   *
-   * @param {string} password - The master password.
-   * @param {Buffer} salt - The salt.
-   * @returns {CryptoKey} - The derived encryption key.
-   */
   async deriveKey(password, salt) {
     const enc = new TextEncoder();
     const keyMaterial = await subtle.importKey(
@@ -63,146 +99,106 @@ class Keychain {
     );
   }
 
-  /**
-   * Computes an HMAC for a given domain using the derived key.
-   *
-   * @param {string} domain - The domain name.
-   * @returns {string} - The HMAC of the domain.
-   */
   computeHMAC(domain) {
-    // It's recommended to use a separate key for HMAC, but for simplicity, we'll use the same key here.
-    // In a production system, derive separate keys for different purposes.
-    return crypto.createHmac('sha256', this.secrets.key)
-                 .update(domain)
-                 .digest('hex');
+    return crypto.createHmac('sha256', bufferToString(this.secrets.salt))
+                .update(domain)
+                .digest('hex');
   }
 
-  /**
-    * Loads the keychain state from the provided representation (repr). The
-    * repr variable will contain a JSON encoded serialization of the contents
-    * of the KVS (as returned by the dump function). The trustedDataCheck
-    * is an *optional* SHA-256 checksum that can be used to validate the 
-    * integrity of the contents of the KVS. If the checksum is provided and the
-    * integrity check fails, an exception should be thrown. You can assume that
-    * the representation passed to load is well-formed (i.e., it will be
-    * a valid JSON object). Returns a Keychain object that contains the data
-    * from repr. 
-    *
-    * @param {string} password - The master password.
-    * @param {string} repr - The serialized keychain data.
-    * @param {string} trustedDataCheck - The SHA-256 checksum.
-    * @returns {Keychain} - The loaded Keychain instance.
-    */
   static async load(password, repr, trustedDataCheck) {
-    const parsedData = JSON.parse(repr);
-    const { data, salt } = parsedData;
-
     const keychain = new Keychain();
-    keychain.secrets.salt = Buffer.from(salt, 'hex');
-    keychain.secrets.key = await keychain.deriveKey(password, keychain.secrets.salt);
-
+    
+    // Verify integrity
     if (trustedDataCheck) {
       const computedCheck = await keychain.computeSHA256(repr);
-      if (computedCheck !== trustedDataCheck) throw new Error("Data integrity check failed");
+      if (computedCheck !== trustedDataCheck) {
+        throw new Error("Data integrity check failed");
+      }
     }
 
-    keychain.data = data;
+    // Parse the representation
+    const parsedData = JSON.parse(repr);
+    
+    // Validate format
+    if (!parsedData.version || !parsedData.salt) {
+      throw new Error("Invalid keychain format");
+    }
+
+    // Set up encryption materials
+    keychain.secrets.salt = Buffer.from(parsedData.salt, 'hex');
+    keychain.secrets.key = await keychain.deriveKey(password, keychain.secrets.salt);
+
+    // Restore the storage
+    keychain.storage = await Storage.deserialize(repr);
+
     return keychain;
   }
 
-  /**
-   * Encrypts the provided data using AES-GCM.
-   *
-   * @param {string} data - The data to encrypt.
-   * @returns {object} - An object containing the IV and encrypted content.
-   */
   async encrypt(data) {
     try {
-      const iv = getRandomBytes(12); // AES-GCM needs a 12-byte IV
+      const iv = getRandomBytes(12);
       const encodedData = stringToBuffer(data);
-
       const encryptedContent = await subtle.encrypt(
         { name: "AES-GCM", iv: iv },
         this.secrets.key,
         encodedData
       );
 
-      return { iv: bufferToString(iv), content: bufferToString(encryptedContent) };
+      return {
+        iv: iv,
+        ciphertext: new Uint8Array(encryptedContent)
+      };
     } catch (error) {
       throw new Error("Encryption failed: " + error.message);
     }
   }
 
-  /**
-   * Decrypts the provided encrypted data using AES-GCM.
-   *
-   * @param {object} encryptedData - The encrypted data containing IV and content.
-   * @returns {string} - The decrypted data as a string.
-   */
   async decrypt(encryptedData) {
     try {
-      const { iv, content } = encryptedData;
       const decryptedContent = await subtle.decrypt(
-        { name: "AES-GCM", iv: stringToBuffer(iv) },
+        { name: "AES-GCM", iv: encryptedData.iv },
         this.secrets.key,
-        stringToBuffer(content)
+        encryptedData.ciphertext
       );
-      return bufferToString(decryptedContent);
+
+      return bufferToString(new Uint8Array(decryptedContent));
     } catch (error) {
       throw new Error("Decryption failed: " + error.message);
     }
   }
 
-  /**
-    * Returns a JSON serialization of the contents of the keychain that can be 
-    * loaded back using the load function. The return value should consist of
-    * an array of two strings:
-    *   arr[0] = JSON encoding of password manager
-    *   arr[1] = SHA-256 checksum (as a string)
-    * As discussed in the handout, the first element of the array should contain
-    * all of the data in the password manager. The second element is a SHA-256
-    * checksum computed over the password manager to preserve integrity.
-    *
-    * @returns {Promise<Array>} - An array containing the JSON data and its checksum.
-    */ 
   async dump() {
     try {
-      const jsonData = JSON.stringify(this.data);
+      // Prepare the full keychain data
+      const dumpData = {
+        version: VERSION,
+        salt: bufferToString(this.secrets.salt, 'hex'),
+        kvs: Object.fromEntries(this.storage.kvs)
+      };
+
+      const jsonData = JSON.stringify(dumpData);
       const checksum = await this.computeSHA256(jsonData);
+      
       return [jsonData, checksum];
     } catch (error) {
       throw new Error("Dump failed: " + error.message);
     }
   }
 
-  /**
-   * Computes a SHA-256 checksum for the provided data.
-   *
-   * @param {string} data - The data to checksum.
-   * @returns {Promise<string>} - The SHA-256 checksum as a hex string.
-   */
   async computeSHA256(data) {
     try {
       const enc = new TextEncoder();
       const hashBuffer = await subtle.digest("SHA-256", enc.encode(data));
-      return bufferToString(hashBuffer);
+      return bufferToString(new Uint8Array(hashBuffer));
     } catch (error) {
       throw new Error("SHA-256 computation failed: " + error.message);
     }
   }
 
-  /**
-    * Fetches the data (as a string) corresponding to the given domain from the KVS.
-    * If there is no entry in the KVS that matches the given domain, then return
-    * null.
-    *
-    * @param {string} name - The domain name.
-    * @returns {Promise<string|null>} - The decrypted password or null if not found.
-    */
   async get(name) {
     try {
       const hmacName = this.computeHMAC(name);
-      const encryptedData = this.data[hmacName];
+      const encryptedData = await this.storage.retrieve(hmacName);
       if (!encryptedData) return null;
       return await this.decrypt(encryptedData);
     } catch (error) {
@@ -210,48 +206,27 @@ class Keychain {
     }
   }
 
-  /** 
-  * Inserts the domain and associated data into the KVS. If the domain is
-  * already in the password manager, this method should update its value. If
-  * not, create a new entry in the password manager.
-  *
-  * @param {string} name - The domain name.
-  * @param {string} value - The password to store.
-  * @returns {Promise<void>}
-  */
   async set(name, value) {
     try {
       const hmacName = this.computeHMAC(name);
       const encryptedValue = await this.encrypt(value);
-      this.data[hmacName] = encryptedValue;
+      await this.storage.store(hmacName, encryptedValue);
     } catch (error) {
       throw new Error("Set failed: " + error.message);
     }
   }
 
-  /**
-    * Removes the record with the specified domain name from the password manager.
-    * Returns true if the record is removed, false otherwise.
-    *
-    * @param {string} name - The domain name.
-    * @returns {Promise<boolean>} - Whether the removal was successful.
-    */
   async remove(name) {
     try {
       const hmacName = this.computeHMAC(name);
-      if (this.data[hmacName]) {
-        delete this.data[hmacName];
-        return true;
-      }
-      return false;
+      return await this.storage.remove(hmacName);
     } catch (error) {
       throw new Error("Remove failed: " + error.message);
     }
   }
-};
+}
 
-module.exports = { Keychain };
-
+module.exports = { Keychain, Storage };
 
 //Encryption-Decryption with Subtle Crypto 
 
