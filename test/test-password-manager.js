@@ -176,5 +176,26 @@ describe('Password manager', async function() {
             // Assert that the decrypted password matches the original
             expect(decryptedPassword).to.equal(originalPassword);
         });
+
+        // New test to verify that tampering with encrypted data is detected
+        it('should detect tampering with encrypted password data', async function() {
+            let keychain = await Keychain.init(password);
+            let url = 'www.example.com';
+            let pw = 'secretpassword123';
+            
+            // Set the password normally
+            await keychain.set(url, pw);
+            
+            // Dump the database
+            let data = await keychain.dump();
+            let contents = data[0];
+            let checksum = data[1];
+            
+            // Tamper with the contents by modifying a character
+            let tamperedContents = contents.replace(contents[10], 'X');
+            
+            // Attempt to load with tampered contents should fail
+            await expectReject(Keychain.load(password, tamperedContents, checksum));
+        });
     });
 });
