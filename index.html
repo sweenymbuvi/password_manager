@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Password Manager</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #f4f7fa;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #333;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+        }
+
+        h1 {
+            font-size: 24px;
+            margin-bottom: 20px;
+            text-align: center;
+            color: #007bff;
+        }
+
+        h2 {
+            font-size: 18px;
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        input {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            background-color: #fafafa;
+            transition: border-color 0.3s;
+        }
+
+        input:focus {
+            border-color: #007bff;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            font-size: 16px;
+            background-color: #007bff;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        .btn-danger {
+            background-color: #dc3545;
+        }
+
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+
+        .message {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            text-align: center;
+            display: none;
+        }
+
+        .message.success {
+            background-color: #28a745;
+            color: white;
+        }
+
+        .message.error {
+            background-color: #dc3545;
+            color: white;
+        }
+
+        .entry-list {
+            margin-top: 20px;
+            margin-bottom: 20px;
+            border-top: 2px solid #f1f1f1;
+            padding-top: 10px;
+        }
+
+        .entry {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .entry span {
+            font-size: 14px;
+            color: #333;
+        }
+
+        .password {
+            font-weight: bold;
+            color: #007bff;
+        }
+
+        .entry-actions button {
+            background-color: transparent;
+            border: none;
+            color: #007bff;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .entry-actions button:hover {
+            text-decoration: underline;
+        }
+
+        .lock-btn {
+            background-color: #f39c12; /* Orange color */
+        }
+
+        .lock-btn:hover {
+            background-color: #e67e22;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Secure Password Manager</h1>
+
+        <!-- Error and Success Message -->
+        <div id="errorDisplay" class="message error"></div>
+        <div id="successDisplay" class="message success"></div>
+
+        <!-- Initialize Section -->
+        <div id="initSection">
+            <h2>Initialize Your Password Manager</h2>
+            <div class="input-group">
+                <input type="password" id="masterPassword" placeholder="Enter a Master Password (min 8 characters)" required />
+            </div>
+            <button class="btn" id="initBtn">Initialize</button>
+            <div id="passwordRequirements" class="hide">
+                <ul>
+                    <li>Password must be at least 8 characters long</li>
+                    <li>Password must contain at least one uppercase letter</li>
+                    <li>Password must contain at least one number</li>
+                    <li>Password must contain at least one special character</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Unlock Section -->
+        <div id="unlockSection" class="hide">
+            <h2>Unlock Your Password Manager</h2>
+            <div class="input-group">
+                <input type="password" id="unlockPassword" placeholder="Enter Your Master Password" required />
+            </div>
+            <button class="btn" id="unlockBtn">Unlock</button>
+        </div>
+
+        <!-- Main Section -->
+        <div id="mainSection" class="hide">
+            <h2>Your Password Entries</h2>
+            <div id="entriesList" class="entry-list"></div>
+            <button class="btn" id="addEntryBtn">Add Entry</button>
+            
+            <h3>Add New Entry</h3>
+            <div class="input-group">
+                <input type="text" id="domainInput" placeholder="Enter Domain (e.g., example.com)" />
+            </div>
+            <div class="input-group">
+                <input type="password" id="passwordInput" placeholder="Enter Password" />
+            </div>
+
+            <!-- Lock Button -->
+            <button class="btn lock-btn" id="lockBtn">Lock</button>
+        </div>
+    </div>
+
+    <script>
+        class PasswordManager {
+            constructor() {
+                this.keychain = null;
+                this.entries = this.loadEntries();
+                this.lastActivity = Date.now();
+                this.inactivityTimeout = 3 * 60 * 1000; // 3 minutes
+                this.setupEventListeners();
+                this.checkInactivity();
+            }
+
+            setupEventListeners() {
+                document.getElementById('initBtn').addEventListener('click', () => this.initialize());
+                document.getElementById('unlockBtn').addEventListener('click', () => this.unlock());
+                document.getElementById('lockBtn').addEventListener('click', () => this.lock());
+                document.getElementById('addEntryBtn').addEventListener('click', () => this.addEntry());
+                document.getElementById('masterPassword').addEventListener('input', (e) => this.updatePasswordStrength(e.target.value));
+
+                ['mousedown', 'keydown', 'scroll', 'mousemove'].forEach(event => {
+                    document.addEventListener(event, () => this.updateActivity());
+                });
+            }
+
+            showError(message) {
+                const errorDisplay = document.getElementById('errorDisplay');
+                errorDisplay.textContent = message;
+                errorDisplay.style.display = 'block';
+                setTimeout(() => errorDisplay.style.display = 'none', 5000);
+            }
+
+            showSuccess(message) {
+                const successDisplay = document.getElementById('successDisplay');
+                successDisplay.textContent = message;
+                successDisplay.style.display = 'block';
+                setTimeout(() => successDisplay.style.display = 'none', 5000);
+            }
+
+            loadEntries() {
+                const storedEntries = localStorage.getItem('passwordEntries');
+                return storedEntries ? new Map(JSON.parse(storedEntries)) : new Map();
+            }
+
+            saveEntries() {
+                localStorage.setItem('passwordEntries', JSON.stringify([...this.entries]));
+            }
+
+            checkInactivity() {
+                setInterval(() => {
+                    if (Date.now() - this.lastActivity > this.inactivityTimeout) {
+                        this.lock();
+                    }
+                }, 1000);
+            }
+
+            initialize() {
+                const password = document.getElementById('masterPassword').value;
+                if (password.length < 8) {
+                    this.showError('Master password must be at least 8 characters long.');
+                    return;
+                }
+
+                const salt = CryptoJS.lib.WordArray.random(128 / 8);
+                const keychain = CryptoJS.PBKDF2(password, salt, { keySize: 256 / 32 });
+
+                localStorage.setItem('masterPasswordSalt', salt.toString(CryptoJS.enc.Base64)); // Ensure salt is stored correctly
+                localStorage.setItem('masterPasswordHash', keychain.toString(CryptoJS.enc.Base64)); // Ensure hash is stored correctly
+
+                document.getElementById('initSection').style.display = 'none';
+                document.getElementById('unlockSection').style.display = 'block';
+            }
+
+            unlock() {
+                const password = document.getElementById('unlockPassword').value;
+
+                const storedSalt = localStorage.getItem('masterPasswordSalt');
+                const storedKeychain = localStorage.getItem('masterPasswordHash');
+
+                if (!storedKeychain || !storedSalt) {
+                    this.showError('Master password not initialized.');
+                    return;
+                }
+
+                const salt = CryptoJS.enc.Base64.parse(storedSalt);
+                const keychain = CryptoJS.PBKDF2(password, salt, { keySize: 256 / 32 });
+
+                if (keychain.toString(CryptoJS.enc.Base64) === storedKeychain) {
+                    this.showSuccess('Password Manager Unlocked!');
+                    document.getElementById('unlockSection').style.display = 'none';
+                    document.getElementById('mainSection').style.display = 'block';
+                } else {
+                    this.showError('Incorrect Master Password.');
+                }
+            }
+
+            lock() {
+                this.showSuccess('Password Manager Locked');
+                document.getElementById('mainSection').style.display = 'none';
+                document.getElementById('unlockSection').style.display = 'block';
+            }
+
+            addEntry() {
+                const domain = document.getElementById('domainInput').value;
+                const password = document.getElementById('passwordInput').value;
+                if (domain && password) {
+                    this.entries.set(domain, password);
+                    this.saveEntries();
+                    this.renderEntries();
+                    document.getElementById('domainInput').value = '';
+                    document.getElementById('passwordInput').value = '';
+                }
+            }
+
+            renderEntries() {
+                const entriesList = document.getElementById('entriesList');
+                entriesList.innerHTML = '';
+                this.entries.forEach((password, domain) => {
+                    const entry = document.createElement('div');
+                    entry.classList.add('entry');
+                    entry.innerHTML = `
+                        <span>${domain}</span>
+                        <span class="password">${password}</span>
+                        <div class="entry-actions">
+                            <button onclick="passwordManager.removeEntry('${domain}')">Remove</button>
+                        </div>
+                    `;
+                    entriesList.appendChild(entry);
+                });
+            }
+
+            removeEntry(domain) {
+                this.entries.delete(domain);
+                this.saveEntries();
+                this.renderEntries();
+            }
+
+            updateActivity() {
+                this.lastActivity = Date.now();
+            }
+
+            updatePasswordStrength(password) {
+                if (password.length < 8) {
+                    this.showError('Password is too weak.');
+                }
+            }
+        }
+
+        const passwordManager = new PasswordManager();
+    </script>
+
+</body>
+</html>
